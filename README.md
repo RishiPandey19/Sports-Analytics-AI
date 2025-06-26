@@ -1,1 +1,1 @@
-# Sports-Analytics-AI
+# Sports-Analytics-NBA
