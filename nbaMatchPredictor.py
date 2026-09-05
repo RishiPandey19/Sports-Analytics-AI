@@ -18,7 +18,6 @@ DEFAULT_SEASON = "2023-24"
 BASIC_COLS = ["PTS", "REB", "AST", "STL", "BLK", "FG_PCT", "FT_PCT", "PLUS_MINUS"]
 ADV_COLS = ["OFF_RATING", "DEF_RATING", "NET_RATING", "AST_PCT", "REB_PCT", "EFG_PCT", "TS_PCT"]
 STATS_COLS = BASIC_COLS[:-1] + ADV_COLS
-FEATURE_COLS = [f"{col}_ROLL" for col in STATS_COLS]
 ROLLING_WINDOW = 5
 DEFAULT_GAMES_PER_TEAM = 45
 
@@ -77,20 +76,47 @@ def collect_team_data(team_name: str, season: str, games_per_team: int) -> pd.Da
 
 
 def add_rolling_features(df: pd.DataFrame) -> pd.DataFrame:
+    available_stats = [
+        column for column in STATS_COLS if column in df.columns and df[column].notna().any()
+    ]
+    if not available_stats:
+        return pd.DataFrame()
+
     rolling_stats = (
-        df.groupby("TEAM", group_keys=False)[STATS_COLS]
+        df.groupby("TEAM", group_keys=False)[available_stats]
         .apply(lambda frame: frame.rolling(window=ROLLING_WINDOW, min_periods=1).mean().shift(1))
         .reset_index(drop=True)
     )
     combined = df.reset_index(drop=True).join(rolling_stats, rsuffix="_ROLL")
-    return combined.dropna(subset=FEATURE_COLS)
+    feature_cols = [f"{column}_ROLL" for column in available_stats]
+    return combined.dropna(subset=feature_cols)
 
 
-def prepare_dataset(season: str = DEFAULT_SEASON, games_per_team: int = DEFAULT_GAMES_PER_TEAM) -> pd.DataFrame:
+def get_feature_columns(df: pd.DataFrame) -> list[str]:
+    return [f"{column}_ROLL" for column in STATS_COLS if f"{column}_ROLL" in df.columns]
+
+
+def parse_team_names(team_names: str | None) -> list[str]:
+    if not team_names:
+        return list(TEAM_DICT)
+
+    selected = [team.strip() for team in team_names.split(",") if team.strip()]
+    unknown = [team for team in selected if team not in TEAM_DICT]
+    if unknown:
+        valid_examples = ", ".join(list(TEAM_DICT)[:5])
+        raise ValueError(f"Unknown team name(s): {', '.join(unknown)}. Examples: {valid_examples}")
+    return selected
+
+
+def prepare_dataset(
+    season: str = DEFAULT_SEASON,
+    games_per_team: int = DEFAULT_GAMES_PER_TEAM,
+    team_names: list[str] | None = None,
+) -> pd.DataFrame:
     print("Collecting NBA team data and computing rolling pre-game features...")
     all_frames = []
 
-    for team_name in TEAM_DICT:
+    for team_name in team_names or list(TEAM_DICT):
         print(f"Fetching data for {team_name}...")
         team_df = collect_team_data(team_name, season=season, games_per_team=games_per_team)
         if not team_df.empty:
@@ -108,11 +134,12 @@ def prepare_dataset(season: str = DEFAULT_SEASON, games_per_team: int = DEFAULT_
 
 
 def train_model(df: pd.DataFrame) -> RandomForestClassifier:
-    clean_df = df.dropna(subset=FEATURE_COLS + ["PLUS_MINUS"])
+    feature_cols = get_feature_columns(df)
+    clean_df = df.dropna(subset=feature_cols + ["PLUS_MINUS"])
     if clean_df.empty:
         raise ValueError("No valid data after cleaning for training.")
 
-    X = clean_df[FEATURE_COLS]
+    X = clean_df[feature_cols]
     y = (clean_df["PLUS_MINUS"] > 0).astype(int)
     if y.nunique() < 2:
         raise ValueError("Training labels contain only one class.")
@@ -142,15 +169,16 @@ def train_model(df: pd.DataFrame) -> RandomForestClassifier:
 
 
 def get_latest_rolling_features(team_name: str, df: pd.DataFrame) -> pd.DataFrame | None:
+    feature_cols = get_feature_columns(df)
     team_games = df[df["TEAM"] == team_name].sort_values("GAME_DATE")
     if team_games.empty:
         return None
 
-    features = team_games.iloc[-1][FEATURE_COLS]
+    features = team_games.iloc[-1][feature_cols]
     if features.isna().any():
         return None
 
-    return pd.DataFrame([features.values], columns=FEATURE_COLS)
+    return pd.DataFrame([features.values], columns=feature_cols)
 
 
 def predict_matchup(
@@ -207,12 +235,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--game-date", default=None, help="Optional scoreboard date in MM/DD/YYYY format.")
     parser.add_argument("--team1", default="Boston Celtics", help="First team for the mock matchup.")
     parser.add_argument("--team2", default="Los Angeles Lakers", help="Second team for the mock matchup.")
+    parser.add_argument(
+        "--teams",
+        default=None,
+        help="Optional comma-separated team names to fetch, useful for a quick smoke run.",
+    )
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = parse_args()
-    rolling_df = prepare_dataset(season=args.season, games_per_team=args.games_per_team)
+    selected_teams = parse_team_names(args.teams)
+    rolling_df = prepare_dataset(
+        season=args.season,
+        games_per_team=args.games_per_team,
+        team_names=selected_teams,
+    )
     trained_model = train_model(rolling_df)
     predict_today_games(trained_model, rolling_df, game_date=args.game_date)
     print(f"\n=== Mock Matchup: {args.team1} vs {args.team2} ===")
