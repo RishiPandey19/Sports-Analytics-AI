@@ -13,6 +13,7 @@ This is a sports analytics learning project, not a betting system. The goal is t
 - Reports holdout accuracy and a majority-class baseline
 - Predicts scheduled games for a selected date or runs a mock matchup between two teams
 - Skips predictions when team features are unavailable instead of generating fake replacement statistics
+- Falls back to available real box-score features if advanced box-score data is unavailable from the NBA endpoint
 
 ## Tech Stack
 
@@ -52,6 +53,14 @@ Use more or fewer recent games per team:
 python nbaMatchPredictor.py --games-per-team 60
 ```
 
+Run a faster smoke check with only selected teams:
+
+```bash
+python nbaMatchPredictor.py \
+  --teams "Boston Celtics,Los Angeles Lakers" \
+  --games-per-team 8
+```
+
 Predict games for a specific scoreboard date:
 
 ```bash
@@ -80,6 +89,8 @@ Features include:
 - Field goal percentage and free throw percentage
 - Offensive, defensive, and net rating
 - Assist, rebound, effective field goal, and true shooting percentages
+
+If advanced box-score data is unavailable for a run, the model trains on the real basic box-score features that were successfully collected rather than filling missing values with synthetic statistics.
 
 ## Evaluation
 
